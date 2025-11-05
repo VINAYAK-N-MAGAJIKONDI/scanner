@@ -5,6 +5,13 @@ from datetime import datetime
 from datetime import timezone
 import time
 
+
+try:
+    import cv2
+    import numpy as np
+except Exception:
+    cv2 = None
+
 # Initialize Firebase Admin SDK
 cred = credentials.Certificate('key.json')
 firebase_admin.initialize_app(cred)
@@ -65,7 +72,8 @@ def calculate_parking_fee(entry_time, exit_time):
     
     duration = exit_time - entry_time
     hours = duration.total_seconds() / 3600
-    return round(hours * PARKING_RATE_PER_HOUR)
+    fee = round(hours * PARKING_RATE_PER_HOUR)
+    return max(fee , 50)
 
 def log_transaction(userid, amount, transaction_type):
     """Log financial transactions and admin logs"""
@@ -81,7 +89,7 @@ def log_transaction(userid, amount, transaction_type):
         'timestamp': current_time,
         'action': 'exit' if transaction_type == 'parking_fee' else transaction_type,
         'userid': userid,
-        'fee_charged': amount if transaction_type == 'parking_fee' else 0,
+        'fee_charged': amount if transaction_type == 'parking_fee' else 10,
         'gate_id': 'GATE_001'  # Can be configured as needed
     }
     
@@ -258,11 +266,84 @@ def main():
     if not log_ref.get().exists:
         log_ref.set({'last_log_id': 0})
     
+    # If OpenCV is available, use camera scanning. Otherwise fallback to terminal input.
+    use_camera = cv2 is not None
+
+    def scan_qr_from_camera(camera_index=0, timeout=10):
+        """Open camera and scan for a QR code. Returns the decoded string or None.
+
+        Uses OpenCV's QRCodeDetector so pyzbar is not required.
+        """
+        if cv2 is None:
+            return None
+        cap = cv2.VideoCapture(camera_index)
+        if not cap.isOpened():
+            print("Error: Cannot open camera")
+            return None
+
+        detector = cv2.QRCodeDetector()
+        start_time = time.time()
+        uid = None
+        window_name = 'Scan QR - press q to quit'
+
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            # detect and decode
+            data, points, _ = detector.detectAndDecode(frame)
+            if points is not None:
+                # draw polygon around QR
+                try:
+                    pts = points.astype(int).reshape(-1, 2)
+                    for i in range(len(pts)):
+                        pt1 = tuple(pts[i])
+                        pt2 = tuple(pts[(i + 1) % len(pts)])
+                        cv2.line(frame, pt1, pt2, (0, 255, 0), 2)
+                except Exception:
+                    pass
+
+            if data:
+                uid = data.strip()
+                # show decoded text
+                try:
+                    cv2.putText(frame, uid, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                except Exception:
+                    pass
+
+            cv2.imshow(window_name, frame)
+
+            if uid:
+                time.sleep(0.3)
+                break
+
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+            if timeout and (time.time() - start_time) > timeout:
+                break
+
+        cap.release()
+        try:
+            cv2.destroyAllWindows()
+        except Exception:
+            pass
+
+        return uid
+
     while True:
         try:
-            userid = input("\nScan user ID (or press Enter): ").strip()
-            if not userid:
-                continue
+            if use_camera:
+                print("\nWaiting for QR scan (camera)... Press 'q' in the window to cancel or Ctrl+C to exit")
+                userid = scan_qr_from_camera(timeout=15)
+                if not userid:
+                    # no scan, continue loop
+                    continue
+            else:
+                userid = input("\nScan user ID (or press Enter): ").strip()
+                if not userid:
+                    continue
                 
             # Check if user has active session
             parking_ref = db.collection('parking_sessions').where(filter=FieldFilter('userid', '==', userid)).where(filter=FieldFilter('status', '==', 'active'))
