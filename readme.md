@@ -1,6 +1,6 @@
-# Smart Parking Gate System
+# Smart Parking Gate System with QR Scanning
 
-A Python-based parking management system using **Firebase Firestore** to handle user accounts, vehicle entry/exit, and automated billing. This system supports real-time wallet management for users, tracks parking sessions, logs transactions, and updates admin balances automatically.
+A Python-based parking management system integrated with **Firebase Firestore** that handles user accounts, parking sessions, automated billing, and QR code scanning for vehicle entry/exit. Users have digital wallets, and admin balances are updated automatically.
 
 ---
 
@@ -8,31 +8,38 @@ A Python-based parking management system using **Firebase Firestore** to handle 
 
 * **User Management**
 
-  * Create users automatically when they first enter the parking lot.
-  * Users are assigned a unique ID, email, and an initial wallet balance (Rs. 1000).
+  * Automatic user creation on first scan.
+  * Users are assigned a unique ID, email, and initial wallet balance of Rs. 1000.
+  * Validation for user IDs (3-digit numeric IDs between 100–999).
 
 * **Parking Session Management**
 
-  * Record vehicle entry and exit with timestamps.
-  * Detect and prevent duplicate active sessions.
-  * Calculate parking fees based on duration (Rs. 50 per hour).
+  * Track vehicle entry and exit with timestamps.
+  * Prevent multiple active sessions per user.
+  * Calculate parking fees (Rs. 50/hour, minimum Rs. 50).
 
 * **Wallet & Transactions**
 
-  * Deduct parking fees from the user’s wallet.
+  * Deduct parking fees from user wallets.
   * Update admin wallet balance automatically.
   * Log transactions in Firestore (`transaction_logs` and `admin_logs` collections).
 
 * **Admin Management**
 
-  * Admin account is created automatically if not present.
-  * Tracks total collected parking fees.
-  * Maintains an incremental log of parking activities.
+  * Auto-create admin account if not present.
+  * Tracks total collected fees.
+  * Maintains incremental log IDs for admin actions.
+
+* **QR Code Support**
+
+  * Detect QR codes using OpenCV’s `QRCodeDetector`.
+  * Optionally fallback to terminal input if camera/QR scanning is unavailable.
+  * Visual feedback: Draws polygon around QR code in camera frame.
 
 * **Security & Validation**
 
-  * User ID validation (3-digit numeric IDs between 100–999).
   * Prevents rapid re-scanning (less than 30 seconds) to avoid double charges.
+  * Ensures correct session handling for entry/exit.
 
 ---
 
@@ -44,8 +51,10 @@ A Python-based parking management system using **Firebase Firestore** to handle 
 
   * `firebase_admin` – Firebase Admin SDK
   * `google.cloud.firestore` – Firestore operations
-  * `datetime` – Handling time and timestamps
+  * `datetime` – Handling timestamps
   * `uuid` – Unique ID generation
+  * `cv2` (OpenCV) – QR code scanning (optional)
+  * `numpy` – Image processing support for OpenCV
 
 ---
 
@@ -61,7 +70,7 @@ cd smart-parking-gate
 2. Install dependencies:
 
 ```bash
-pip install firebase-admin google-cloud-firestore
+pip install firebase-admin google-cloud-firestore opencv-python numpy
 ```
 
 3. Add your Firebase Admin SDK key:
@@ -72,7 +81,7 @@ pip install firebase-admin google-cloud-firestore
 
 ## Configuration
 
-* Update the following constants in the script:
+* Update the constants in the script:
 
 ```python
 PARKING_RATE_PER_HOUR = 50   # Parking fee per hour
@@ -80,6 +89,8 @@ ADMIN_UID = "admin123"       # Admin's UID
 MIN_USERID = 100              # Minimum valid user ID
 MAX_USERID = 999              # Maximum valid user ID
 ```
+
+* QR scanning uses the default camera index 0. Adjust in `scan_qr_from_camera(camera_index=0)` if needed.
 
 ---
 
@@ -91,16 +102,20 @@ MAX_USERID = 999              # Maximum valid user ID
 python parking_gate_system.py
 ```
 
-2. The system will prompt:
+2. **QR Mode:** If OpenCV is installed and a camera is available:
+
+* The system opens a camera window and detects QR codes.
+* On successful scan, it records entry/exit and processes payments automatically.
+
+3. **Fallback Mode:** If camera or OpenCV is unavailable:
+
+* The system prompts for user ID input via terminal:
 
 ```
 Scan user ID (or press Enter):
 ```
 
-* **Entry:** Scan a new or existing user ID. The system creates the user if not found and records the entry time.
-* **Exit:** Scan a user ID with an active session. The system calculates the parking fee, deducts from the wallet, updates admin balance, and logs the transaction.
-
-3. Press **Ctrl+C** to stop the system.
+4. **Exit the program:** Press **Ctrl+C**.
 
 ---
 
@@ -108,8 +123,8 @@ Scan user ID (or press Enter):
 
 | Collection Name    | Description                                                                      |
 | ------------------ | -------------------------------------------------------------------------------- |
-| `users`            | Stores user info, wallet balance, and metadata.                                  |
-| `parking_sessions` | Tracks active and completed parking sessions with entry/exit times.              |
+| `users`            | Stores user information, wallet balance, and metadata.                           |
+| `parking_sessions` | Tracks active and completed parking sessions with timestamps.                    |
 | `transaction_logs` | Records user wallet transactions and fees.                                       |
 | `admin_logs`       | Logs admin activities and parking fee collection, including incremental log IDs. |
 
@@ -117,41 +132,53 @@ Scan user ID (or press Enter):
 
 ## Functions Overview
 
-* **`create_user_if_not_exists(userid)`** – Creates a new user if they don’t exist.
-* **`record_entry(userid)`** – Logs vehicle entry for a user.
-* **`record_exit(userid)`** – Logs vehicle exit and handles payment processing.
-* **`calculate_parking_fee(entry_time, exit_time)`** – Calculates parking charges.
-* **`update_user_wallet(userid, amount)`** – Deducts parking fee from user wallet.
-* **`update_admin_wallet(amount)`** – Updates admin wallet balance and total collected.
-* **`log_transaction(userid, amount, transaction_type)`** – Records all transactions and admin logs.
+* **User & Wallet Management**
+
+  * `create_user_if_not_exists(userid)` – Create a new user if not present.
+  * `get_user_by_userid(userid)` – Fetch user document.
+  * `get_user_balance(userid)` – Retrieve wallet balance.
+  * `update_user_wallet(userid, amount)` – Deduct amount from user wallet.
+  * `update_admin_wallet(amount)` – Update admin wallet and total collected.
+
+* **Parking Management**
+
+  * `record_entry(userid)` – Logs vehicle entry.
+  * `record_exit(userid)` – Logs vehicle exit and handles payment.
+  * `calculate_parking_fee(entry_time, exit_time)` – Compute parking charges.
+
+* **Transactions & Logs**
+
+  * `log_transaction(userid, amount, transaction_type)` – Record transactions and admin logs.
+
+* **QR Scanning**
+
+  * `scan_qr_from_camera(camera_index=0, timeout=10)` – Detect QR code via OpenCV camera.
 
 ---
 
 ## Notes
 
 * All timestamps are stored in UTC.
+* Minimum parking fee is Rs. 50.
 * Users can have only one active session at a time.
-* Parking fee is rounded to the nearest integer.
-* Ensure Firebase Firestore has read/write permissions for the Admin SDK.
+* Admin is automatically created with UID `admin123` if missing.
+* QR code scanning is optional; terminal input is a fallback.
 
 ---
 
 ## Future Improvements
 
-* Integrate with an IoT module to automatically detect free/occupied spots.
-* Add QR code or NFC scanning for faster entry/exit.
-* Implement a web dashboard to visualize sessions and transactions.
-* Add notifications for low wallet balance.
-* Support multi-gate setups with configurable gate IDs.
+* Integrate IoT sensors for automatic parking slot detection.
+* Add a web dashboard to monitor sessions, transactions, and wallet balances.
+* Enable multi-gate support with configurable gate IDs.
+* Notify users for low wallet balance.
+* Implement automated QR code generation per user for faster scanning.
 
 ---
 
 ## License
 
-This project is open-source and free to use under the MIT License.
+MIT License – Open-source and free to use.
 
 ---
 
-## Author
-
-Vinayak Magajikondi
